@@ -18,5 +18,5 @@ sites:
 
 # Telegram-asetukset
 telegram:
-  token: "8193881799:AAFtA0WgTqnftePxmHH_XhtVSCXiQmhekgg"
-  chat_id: "-1003125625250"
+  token: ${TELEGRAM_TOKEN}
+  chat_id: ${TELEGRAM_CHAT_ID}
