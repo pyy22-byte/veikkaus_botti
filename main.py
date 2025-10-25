@@ -3,6 +3,8 @@
 import yaml
 import schedule
 import time
+import os
+
 
 from scraper import fetch_odds
 from compare import match_events
@@ -30,17 +32,25 @@ def run_check():
     pinnacle_events = fetch_odds(pinnacle_config)
     # Compare events and prepare notifications
     notifications = match_events(veikkaus_events, pinnacle_events, threshold)
-    # Send notifications
-    for event in notifications:
-        if not was_notified(event["match_id"]):
-            insert_event(event["match_id"], event["veikkaus"], event["pinnacle"])
-            message = build_notification_message(event)
-            send_telegram_message(
-                config["telegram"]["token"],
-                config["telegram"]["chat_id"],
-                message,
-            )
-            mark_as_notified(event["match_id"])
+# Resolve Telegram credentials from environment variables or config
+token = os.environ.get("TELEGRAM_TOKEN")
+chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+telegram_config = config.get("telegram", {})
+if token is None:
+    token = telegram_config.get("token")
+if chat_id is None:
+    chat_id = telegram_config.get("chat_id")
+
+# Send notifications
+for event in notifications:
+    match_id = event["match_id"]
+    if not was_notified(match_id):
+        insert_event(match_id, event["veikkaus"], event["pinnacle"])
+        message = build_notification_message(event)
+        # Only send a message if both token and chat_id are available
+        if token and chat_id:
+            send_telegram_message(token, chat_id, message)
+        mark_as_notified(match_id)
 
 
 if __name__ == "__main__":
