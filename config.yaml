@@ -5,7 +5,7 @@ threshold_percent: 5.0
 # Sivustojen URL-osoitteet ja valitsimet
 sites:
   veikkaus:
-    url: "https://www.veikkaus.fi/fi/vedonlyonti/urheilulajit/jaakiekko/nhl"
+    url: "https://www.veikkaus.fi/fi/vedonlyonti/pitkaveto?t=3-2-1_NHL"
     event_selector: "div.ottelu"  # TODO: korvaa todellisella CSS-valitsimella
     team_selector: "span.joukkue"
     odds_selector: "span.kerroin"
