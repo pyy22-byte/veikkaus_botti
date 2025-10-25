@@ -12,10 +12,11 @@ from db import initialize_db, upsert_event, was_notified, mark_notified
 from notifier import send_telegram_message, build_message
 
 def load_config():
-    from string import Template
     with open("config.yaml", "r", encoding="utf-8") as f:
-        templated = Template(f.read()).substitute(os.environ)
-    return yaml.safe_load(templated)
+        raw = f.read()
+    # Korvaa vain $VAR / ${VAR} (esim. TELEGRAM_TOKEN) – ei koske CSS:n $=-merkintöjä
+    expanded = os.path.expandvars(raw)
+    return yaml.safe_load(expanded)
 
 def run_once():
     cfg = load_config()
