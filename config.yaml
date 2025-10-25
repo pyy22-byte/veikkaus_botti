@@ -1,22 +1,33 @@
 # Yleiset asetukset
 sport: "NHL"
-threshold_percent: 5.0
+threshold_percent: 5.0   # Lähetä ilmoitus, kun Veikkaus on näin monta % parempi kuin Pinnacle
 
-# Sivustojen URL-osoitteet ja valitsimet
 sites:
-  veikkaus:
-    url: "https://www.veikkaus.fi/fi/vedonlyonti/pitkaveto?t=3-2-1_NHL"
-    event_selector: "div.ottelu"  # TODO: korvaa todellisella CSS-valitsimella
-    team_selector: "span.joukkue"
-    odds_selector: "span.kerroin"
-
   pinnacle:
+    # Pinnacle NHL matchups list
     url: "https://www.pinnacle.com/en/hockey/nhl/matchups"
-    event_selector: "div.event"
-    team_selector: "span.team"
-    odds_selector: "span.odds"
+    # Jokainen ottelurivi
+    event_selector: 'div[data-test-id^="row-"]'
+    # Joukkueiden nimet rivissä
+    team_selector: 'span.ellipsis[class^="gameInfoLabel"]'
+    # Moneyline-konteineri rivissä
+    money_container_selector: 'div[data-test-id="moneyline"]'
+    # Jokaisen moneyline-painikkeen sisällä kertoimen <span>
+    price_selector: 'span[class^="price"]'
 
-# Telegram-asetukset
+  veikkaus:
+    # Pitkävedon listaus näyttää 1X2, mutta moneyline on ottelun omalla sivulla.
+    # Tämä on esimerkki yksittäisen ottelun sivusta; scraper käy läpi ottelulinkit.
+    list_url: "https://www.veikkaus.fi/fi/vedonlyonti/pitkaveto?t=3-2-1"
+    # Listasivun ottelukortit (yksittäisen ottelun linkki löytyy tältä riviltä <a>)
+    list_event_selector: 'div[data-test-id^="matchRow"] a[href*="kohde="]'
+    # Ottelusivulla moneyline-painikkeet
+    ml_button_selector: 'button[data-test-id$="MONEY_LINE"]'
+    # Joukkueen nimi painikkeessa
+    ml_team_selector: 'div[class*="competitor-name"]'
+    # Kertoimen <span> painikkeessa
+    ml_price_selector: 'span'
+
 telegram:
   token: ${TELEGRAM_TOKEN}
   chat_id: ${TELEGRAM_CHAT_ID}

@@ -1,65 +1,63 @@
-"""Main entry point for the odds comparison bot."""
-
-import yaml
-import schedule
-import time
+"""
+Main entry point for the NHL moneyline odds comparison bot.
+Runs once per execution (suitable for GitHub Actions cron).
+"""
 import os
+import yaml
+from datetime import datetime, timezone
 
-from scraper import fetch_odds
-from compare import match_events
-from notifier import send_telegram_message, build_notification_message
-from db import initialize_db, insert_event, mark_as_notified, was_notified
-
+from scraper import fetch_pinnacle, fetch_veikkaus
+from compare import compare_moneyline, match_key_from_names
+from db import initialize_db, upsert_event, was_notified, mark_notified
+from notifier import send_telegram_message, build_message
 
 def load_config():
-    """Load configuration from config.yaml."""
+    from string import Template
     with open("config.yaml", "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        templated = Template(f.read()).substitute(os.environ)
+    return yaml.safe_load(templated)
 
+def run_once():
+    cfg = load_config()
+    threshold = float(cfg.get("threshold_percent", 5.0))
+    p_cfg = cfg["sites"]["pinnacle"]
+    v_cfg = cfg["sites"]["veikkaus"]
 
-def run_check():
-    """Perform a single check of odds and send notifications."""
-    config = load_config()
-    threshold = config.get("threshold_percent", 5.0)
-    sites = config.get("sites", {})
-    veikkaus_config = sites.get("veikkaus")
-    pinnacle_config = sites.get("pinnacle")
-    if not (veikkaus_config and pinnacle_config):
-        return
+    print("Fetching Pinnacle...")
+    pinnacle_events = fetch_pinnacle(p_cfg)
+    print(f"Pinnacle events: {len(pinnacle_events)}")
 
-    # Fetch events from both sites
-    veikkaus_events = fetch_odds(veikkaus_config)
-    pinnacle_events = fetch_odds(pinnacle_config)
-    # Compare events and prepare notifications
-    notifications = match_events(veikkaus_events, pinnacle_events, threshold)
+    print("Fetching Veikkaus...")
+    veikkaus_events = fetch_veikkaus(v_cfg)
+    print(f"Veikkaus events: {len(veikkaus_events)}")
 
-    # Resolve Telegram credentials from environment variables or config
+    # Compare and notify
+    notifications = compare_moneyline(pinnacle_events, veikkaus_events, threshold)
+    print(f"Candidates over threshold: {len(notifications)}")
+
+    # Upsert & notify if not yet sent per side
+    now = datetime.now(timezone.utc).isoformat()
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    telegram_config = config.get("telegram", {})
-    if token is None:
-        token = telegram_config.get("token")
-    if chat_id is None:
-        chat_id = telegram_config.get("chat_id")
 
-    # Send notifications
-    for event in notifications:
-        match_id = event["match_id"]
-        if not was_notified(match_id):
-            insert_event(match_id, event["veikkaus"], event["pinnacle"])
-            message = build_notification_message(event)
-            # only send a message if both token and chat_id are available
-            if token and chat_id:
-                send_telegram_message(token, chat_id, message)
-            mark_as_notified(match_id)
+    for p in pinnacle_events:
+        # Join with veikkaus if exists to store combined latest
+        key = match_key_from_names(p["home_team"], p["away_team"])
+        # find matching veikkaus
+        vmatch = next((v for v in veikkaus_events
+                       if match_key_from_names(v["home_team"], v["away_team"]) == key), None)
+        veik_home = vmatch["home_odds"] if vmatch else None
+        veik_away = vmatch["away_odds"] if vmatch else None
+        upsert_event(key, p["home_team"], p["away_team"],
+                     p["home_odds"], p["away_odds"],
+                     veik_home, veik_away, now)
 
+    for ev in notifications:
+        side = ev["side"]
+        if not was_notified(ev["match_key"], side):
+            send_telegram_message(token, chat_id, build_message(ev))
+            mark_notified(ev["match_key"], side)
 
 if __name__ == "__main__":
     initialize_db()
-    run_check()  # Always run once when started
-    # Only run schedule loop when not in GitHub Actions environment
-    if not os.environ.get("GITHUB_ACTIONS"):
-        schedule.every(1).hours.do(run_check)
-        while True:
-            schedule.run_pending()
-            time.sleep(1)
+    run_once()

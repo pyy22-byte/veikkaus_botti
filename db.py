@@ -1,52 +1,53 @@
-"""Database module for storing events and notification status."""
-
 import sqlite3
+from contextlib import closing
 
 DB_PATH = "events.db"
 
-
 def initialize_db():
-    """Initialize the SQLite database and create tables if they don't exist."""
-    conn = sqlite3.connect(DB_PATH)
-    with conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS events ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "match_id TEXT UNIQUE,"
-            "veikkaus_odds REAL,"
-            "pinnacle_odds REAL,"
-            "notified INTEGER DEFAULT 0)"
-        )
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                match_key TEXT PRIMARY KEY,
+                home_team TEXT,
+                away_team TEXT,
+                pinn_home REAL,
+                pinn_away REAL,
+                veik_home REAL,
+                veik_away REAL,
+                notified_home INTEGER DEFAULT 0,
+                notified_away INTEGER DEFAULT 0,
+                updated_at TEXT
+            )
+        """)
 
+def upsert_event(match_key, home_team, away_team, pinn_home, pinn_away, veik_home, veik_away, updated_at):
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute("""
+            INSERT INTO events(match_key, home_team, away_team, pinn_home, pinn_away, veik_home, veik_away, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(match_key) DO UPDATE SET
+                home_team=excluded.home_team,
+                away_team=excluded.away_team,
+                pinn_home=excluded.pinn_home,
+                pinn_away=excluded.pinn_away,
+                veik_home=excluded.veik_home,
+                veik_away=excluded.veik_away,
+                updated_at=excluded.updated_at
+        """, (match_key, home_team, away_team, pinn_home, pinn_away, veik_home, veik_away, updated_at))
 
-def insert_event(match_id, veikkaus_odds, pinnacle_odds):
-    """Insert a new event into the database if it doesn't already exist."""
-    conn = sqlite3.connect(DB_PATH)
-    with conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO events (match_id, veikkaus_odds, pinnacle_odds) "
-            "VALUES (?, ?, ?)",
-            (match_id, veikkaus_odds, pinnacle_odds),
-        )
+def get_event(match_key):
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute("SELECT * FROM events WHERE match_key=?", (match_key,))
+        return cur.fetchone()
 
+def mark_notified(match_key, side):  # side: "home" tai "away"
+    col = "notified_home" if side == "home" else "notified_away"
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute(f"UPDATE events SET {col}=1 WHERE match_key=?", (match_key,))
 
-def mark_as_notified(match_id):
-    """Mark an event as notified."""
-    conn = sqlite3.connect(DB_PATH)
-    with conn:
-        conn.execute(
-            "UPDATE events SET notified = 1 WHERE match_id = ?",
-            (match_id,),
-        )
-
-
-def was_notified(match_id):
-    """Check if an event has been notified."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT notified FROM events WHERE match_id = ?",
-        (match_id,),
-    )
-    row = cur.fetchone()
-    return row is not None and row[0] == 1
+def was_notified(match_key, side):
+    col = "notified_home" if side == "home" else "notified_away"
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute(f"SELECT {col} FROM events WHERE match_key=?", (match_key,))
+        row = cur.fetchone()
+        return bool(row and row[0])

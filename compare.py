@@ -1,33 +1,55 @@
-"""Comparison module for matching events and computing odds differences."""
+def normalize_team(name: str) -> str:
+    return " ".join(name.lower().split())
 
+def match_key_from_names(home: str, away: str) -> str:
+    # Avain sama riippumatta järjestyksestä: a|b (a<b)
+    a, b = sorted([normalize_team(home), normalize_team(away)])
+    return f"{a}|{b}"
 
-def match_events(veikkaus_events, pinnacle_events, threshold_percent):
-    """
-    Compare events from Veikkaus and Pinnacle and return a list of notification dicts
-    if the difference in odds is greater than or equal to the threshold.
+def build_index(events):
+    idx = {}
+    for e in events:
+        key = match_key_from_names(e["home_team"], e["away_team"])
+        idx[key] = e
+    return idx
 
-    Args:
-        veikkaus_events (list of dict): Events scraped from Veikkaus.
-        pinnacle_events (list of dict): Events scraped from Pinnacle.
-        threshold_percent (float): Minimum percentage difference to trigger notification.
+def compare_moneyline(pinn_events, veik_events, threshold_percent):
+    """Palauttaa listan ilmoituksista: dict jossa mm. side=home/away, diff_pct jne."""
+    res = []
+    p_idx = build_index(pinn_events)
+    v_idx = build_index(veik_events)
 
-    Returns:
-        list of dict: Each dict contains match_id, home, away, veikkaus, pinnacle, difference_percent.
-    """
-    notifications = []
-    for veikkaus in veikkaus_events:
-        for pinn in pinnacle_events:
-            if veikkaus["teams"] == pinn["teams"]:
-                if pinn["odds"] == 0:
-                    continue
-                diff = (veikkaus["odds"] - pinn["odds"]) / pinn["odds"] * 100
-                if diff >= threshold_percent:
-                    notifications.append({
-                        "match_id": veikkaus["match_id"],
-                        "home": veikkaus["teams"][0],
-                        "away": veikkaus["teams"][1],
-                        "veikkaus": veikkaus["odds"],
-                        "pinnacle": pinn["odds"],
-                        "difference_percent": round(diff, 2),
-                    })
-    return notifications
+    for key, p in p_idx.items():
+        if key not in v_idx:
+            continue
+        v = v_idx[key]
+
+        # home side
+        if p["home_odds"] and v["home_odds"]:
+            diff_home = (v["home_odds"] - p["home_odds"]) / p["home_odds"] * 100.0
+            if diff_home >= threshold_percent:
+                res.append({
+                    "match_key": key,
+                    "home_team": p["home_team"],
+                    "away_team": p["away_team"],
+                    "side": "home",
+                    "pinn_odds": p["home_odds"],
+                    "veik_odds": v["home_odds"],
+                    "diff_pct": diff_home
+                })
+
+        # away side
+        if p["away_odds"] and v["away_odds"]:
+            diff_away = (v["away_odds"] - p["away_odds"]) / p["away_odds"] * 100.0
+            if diff_away >= threshold_percent:
+                res.append({
+                    "match_key": key,
+                    "home_team": p["home_team"],
+                    "away_team": p["away_team"],
+                    "side": "away",
+                    "pinn_odds": p["away_odds"],
+                    "veik_odds": v["away_odds"],
+                    "diff_pct": diff_away
+                })
+
+    return res

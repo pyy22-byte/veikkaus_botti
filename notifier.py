@@ -1,26 +1,21 @@
-"""Notifier module for sending messages via Telegram."""
-
 import requests
 
-
-def send_telegram_message(token, chat_id, message):
-    """Send a Markdown-formatted message to a Telegram chat."""
+def send_telegram_message(token: str, chat_id: str, text: str) -> None:
+    if not token or not chat_id:
+        return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown",
-    }
-    response = requests.post(url, data=payload)
-    response.raise_for_status()
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    try:
+        requests.post(url, data=data, timeout=15).raise_for_status()
+    except Exception:
+        pass
 
-
-def build_notification_message(event):
-    """Construct a notification message for an arbitrage opportunity."""
+def build_message(event: dict) -> str:
+    # event: dict with keys: home_team, away_team, side, pinn_odds, veik_odds, diff_pct
+    side_txt = "Kotijoukkue" if event["side"] == "home" else "Vierasjoukkue"
     return (
-        f"📢 Arbitraasimahdollisuus havaittu!\n\n"
-        f"Ottelu: {event['home']} – {event['away']}\n"
-        f"Veikkaus: {event['veikkaus']}\n"
-        f"Pinnacle: {event['pinnacle']}\n"
-        f"Ero: +{event['difference_percent']} %\n"
+        f"📣 <b>NHL Moneyline-ero</b>\n"
+        f"{event['home_team']} vs {event['away_team']}\n"
+        f"{side_txt}: Veikkaus {event['veik_odds']} vs Pinnacle {event['pinn_odds']}\n"
+        f"Etu: {event['diff_pct']:.1f}%"
     )

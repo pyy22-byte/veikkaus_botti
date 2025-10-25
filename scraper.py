@@ -1,64 +1,93 @@
-"""Scraper module for fetching odds from configured websites."""
-
 import requests
 from bs4 import BeautifulSoup
 
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+}
 
-def fetch_odds(site_config):
-    """
-    Fetch odds from a website using requests and BeautifulSoup.
+def _get(url):
+    resp = requests.get(url, headers=DEFAULT_HEADERS, timeout=25)
+    resp.raise_for_status()
+    return resp.text
 
-    Args:
-        site_config (dict): Configuration containing URL and CSS selectors.
-
-    Returns:
-        list of dict: Each dict contains 'teams' (tuple), 'odds' (float), and 'match_id' (str).
-    """
-    url = site_config["url"]
-    response = requests.get(url)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
-    events = []
-    for event_elem in soup.select(site_config["event_selector"]):
-        team_elems = event_elem.select(site_config["team_selector"])
-        odds_elem = event_elem.select_one(site_config["odds_selector"])
-        if len(team_elems) == 2 and odds_elem:
-            home = team_elems[0].get_text(strip=True)
-            away = team_elems[1].get_text(strip=True)
-            try:
-                odds = float(odds_elem.get_text(strip=True).replace(",", "."))
-            except ValueError:
-                continue
-            match_id = f"{home}-{away}"
-            events.append({"teams": (home, away), "odds": odds, "match_id": match_id})
-    return events
-
-
-def fetch_odds_selenium(site_config, driver):
-    """
-    Fetch odds using Selenium for websites requiring JavaScript rendering.
-
-    Args:
-        site_config (dict): Configuration containing URL and CSS selectors.
-        driver (selenium.webdriver): An initialized Selenium WebDriver.
-
-    Returns:
-        list of dict: Each dict contains 'teams', 'odds', and 'match_id'.
-    """
-    driver.get(site_config["url"])
-    html = driver.page_source
+def fetch_pinnacle(cfg):
+    """Palauttaa listan dict-olioita: home_team, away_team, home_odds, away_odds"""
+    html = _get(cfg["url"])
     soup = BeautifulSoup(html, "html.parser")
     events = []
-    for event_elem in soup.select(site_config["event_selector"]):
-        team_elems = event_elem.select(site_config["team_selector"])
-        odds_elem = event_elem.select_one(site_config["odds_selector"])
-        if len(team_elems) == 2 and odds_elem:
-            home = team_elems[0].get_text(strip=True)
-            away = team_elems[1].get_text(strip=True)
+    for row in soup.select(cfg["event_selector"]):
+        teams = [el.get_text(strip=True) for el in row.select(cfg["team_selector"])]
+        if len(teams) < 2:
+            continue
+        home, away = teams[0], teams[1]  # Pinnacle listaa yleensä muodossa home vs away
+
+        money = row.select_one(cfg["money_container_selector"])
+        if not money:
+            continue
+        prices = money.select(cfg["price_selector"])
+        if len(prices) < 2:
+            continue
+        try:
+            home_odds = float(prices[0].get_text(strip=True))
+            away_odds = float(prices[1].get_text(strip=True))
+        except ValueError:
+            continue
+
+        events.append({
+            "home_team": home,
+            "away_team": away,
+            "home_odds": home_odds,
+            "away_odds": away_odds
+        })
+    return events
+
+def fetch_veikkaus(cfg):
+    """Hakee listanäkymästä ottelulinkit ja käy jokaisen ottelusivun, josta lukee moneyline-kertoimet."""
+    list_html = _get(cfg["list_url"])
+    soup = BeautifulSoup(list_html, "html.parser")
+    events = []
+
+    links = []
+    for a in soup.select(cfg["list_event_selector"]):
+        href = a.get("href")
+        if not href:
+            continue
+        if href.startswith("/"):
+            href = "https://www.veikkaus.fi" + href
+        links.append(href)
+
+    for href in links:
+        try:
+            html = _get(href)
+        except Exception:
+            continue
+        psoup = BeautifulSoup(html, "html.parser")
+        buttons = psoup.select(cfg["ml_button_selector"])
+        if len(buttons) < 2:
+            continue
+
+        data = []
+        for btn in buttons[:2]:
+            team_el = btn.select_one(cfg["ml_team_selector"])
+            odd_el = btn.select_one(cfg["ml_price_selector"])
+            if not team_el or not odd_el:
+                data.append(None); continue
+            name = team_el.get_text(strip=True)
             try:
-                odds = float(odds_elem.get_text(strip=True).replace(",", "."))
+                odd = float(odd_el.get_text(strip=True).replace(",", "."))
             except ValueError:
-                continue
-            match_id = f"{home}-{away}"
-            events.append({"teams": (home, away), "odds": odds, "match_id": match_id})
+                data.append(None); continue
+            data.append((name, odd))
+
+        if None in data or len(data) < 2:
+            continue
+
+        (home_team, home_odds), (away_team, away_odds) = data[0], data[1]
+        events.append({
+            "home_team": home_team,
+            "away_team": away_team,
+            "home_odds": home_odds,
+            "away_odds": away_odds
+        })
+
     return events
