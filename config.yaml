@@ -1,27 +1,29 @@
 # Yleiset asetukset
 sport: "NHL"
-threshold_percent: 5.0   # Lähetä ilmoitus, kun Veikkaus on näin monta % parempi kuin Pinnacle
+threshold_percent: 5.0
+
+# Laita true kun haluat nähtäville lisälogit, selector-countit ja näyterivit.
+# Paikallisessa ajossa tallettaa myös debug-screenshotteja/HTML:ää hakemistoon ./debug/
+debug: true
 
 sites:
   pinnacle:
-    # Pinnacle NHL matchups list
     url: "https://www.pinnacle.com/en/hockey/nhl/matchups"
-    # Jokainen ottelurivi
+    # Ottelurivi
     event_selector: 'div[data-test-id^="row-"]'
     # Joukkueiden nimet rivissä
     team_selector: 'span.ellipsis[class^="gameInfoLabel"]'
     # Moneyline-konteineri rivissä
     money_container_selector: 'div[data-test-id="moneyline"]'
-    # Jokaisen moneyline-painikkeen sisällä kertoimen <span>
+    # Kertoimen <span>
     price_selector: 'span[class^="price"]'
 
   veikkaus:
-    # Pitkävedon listaus näyttää 1X2, mutta moneyline on ottelun omalla sivulla.
-    # Tämä on esimerkki yksittäisen ottelun sivusta; scraper käy läpi ottelulinkit.
+    # Pitkävedon listaus (NHL-suodatin t=3-2-1)
     list_url: "https://www.veikkaus.fi/fi/vedonlyonti/pitkaveto?t=3-2-1"
-    # Listasivun ottelukortit (yksittäisen ottelun linkki löytyy tältä riviltä <a>)
-    list_event_selector: 'div[data-test-id^="matchRow"] a[href*="kohde="]'
-    # Ottelusivulla moneyline-painikkeet
+    # Ottelulinkit listalta (tupla-valitsin, ensimmäinen joka osuu riittää)
+    list_event_selector: 'a[data-test-id^="pikavetopage-game-row"][href*="kohde="], div[data-test-id^="matchRow"] a[href*="kohde="]'
+    # Ottelusivun moneyline-painikkeet
     ml_button_selector: 'button[data-test-id$="MONEY_LINE"]'
     # Joukkueen nimi painikkeessa
     ml_team_selector: 'div[class*="competitor-name"]'
