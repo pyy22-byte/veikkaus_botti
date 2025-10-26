@@ -1,3 +1,5 @@
+from pathlib import Path
+from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 
@@ -23,6 +25,7 @@ def _accept_cookies(page):
         'button:has-text("I understand")',
         'button:has-text("Hyväksy")',
         'button:has-text("Salli")',
+        'text=Hyväksyn',
     ]
     for sel in selectors:
         try:
@@ -34,7 +37,18 @@ def _accept_cookies(page):
             pass
 
 
-def fetch_pinnacle(cfg):
+def _dbg_dump(page, name, debug_dir):
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    html_path = debug_dir / f"{name}_{ts}.html"
+    png_path = debug_dir / f"{name}_{ts}.png"
+    try:
+        html_path.write_text(page.content(), encoding="utf-8")
+        page.screenshot(path=str(png_path), full_page=True)
+    except Exception:
+        pass
+
+
+def fetch_pinnacle(cfg, debug=False):
     """
     Returns list of dicts:
       {home_team, away_team, home_odds, away_odds}
@@ -42,13 +56,19 @@ def fetch_pinnacle(cfg):
     """
     p, browser, context, page = _launch()
     events = []
+    debug_dir = Path("debug")
+    if debug:
+        debug_dir.mkdir(exist_ok=True)
+
     try:
         page.goto(cfg["url"], wait_until="domcontentloaded", timeout=60000)
         _accept_cookies(page)
-        # Odota että ensimmäinen ottelurivi ilmestyy
         page.wait_for_selector(cfg["event_selector"], timeout=60000)
 
         rows = page.locator(cfg["event_selector"])
+        if debug:
+            print(f"[DEBUG] Pinnacle rows: {rows.count()}")
+
         for i in range(rows.count()):
             row = rows.nth(i)
 
@@ -77,7 +97,101 @@ def fetch_pinnacle(cfg):
                 "home_odds": home_odds,
                 "away_odds": away_odds
             })
+
+        if debug and not events:
+            print("[DEBUG] Pinnacle returned 0 events → dumping snapshot")
+            _dbg_dump(page, "pinnacle", debug_dir)
+
     finally:
+        browser.close()
+        context.close()
+        p.stop()
+    return events
+
+
+def fetch_veikkaus(cfg, debug=False):
+    """
+    Goes to Pitkäveto list page, collects match links,
+    then opens each match page and reads moneyline buttons:
+      button[data-test-id$="MONEY_LINE"]
+    Returns list of dicts like Pinnacle.
+    """
+    p, browser, context, page = _launch()
+    events = []
+    debug_dir = Path("debug")
+    if debug:
+        debug_dir.mkdir(exist_ok=True)
+
+    try:
+        # 1) Listanäkymä: linkit otteluihin
+        page.goto(cfg["list_url"], wait_until="domcontentloaded", timeout=60000)
+        _accept_cookies(page)
+        page.wait_for_selector(cfg["list_event_selector"], timeout=60000)
+
+        anchors = page.locator(cfg["list_event_selector"])
+        link_count = anchors.count()
+        links = []
+        for i in range(link_count):
+            a = anchors.nth(i)
+            href = a.get_attribute("href")
+            if not href:
+                continue
+            if href.startswith("/"):
+                href = "https://www.veikkaus.fi" + href
+            links.append(href)
+
+        if debug:
+            print(f"[DEBUG] Veikkaus match links: {len(links)}")
+
+        # 2) Jokainen ottelusivu → moneyline
+        for href in links:
+            try:
+                page.goto(href, wait_until="domcontentloaded", timeout=60000)
+                _accept_cookies(page)
+                page.wait_for_selector(cfg["ml_button_selector"], timeout=30000)
+
+                btns = page.locator(cfg["ml_button_selector"])
+                if btns.count() < 2:
+                    if debug:
+                        print(f"[DEBUG] No ML buttons on {href}")
+                    continue
+
+                data = []
+                for j in range(2):
+                    btn = btns.nth(j)
+                    team_el = btn.locator(cfg["ml_team_selector"]).first
+                    odd_el = btn.locator(cfg["ml_price_selector"]).first
+                    if not (team_el.count() and odd_el.count()):
+                        data = []
+                        break
+                    name = team_el.inner_text().strip()
+                    txt = odd_el.inner_text().strip().replace(",", ".")
+                    data.append((name, float(txt)))
+
+                if len(data) != 2:
+                    continue
+
+                (home_name, home_odds), (away_name, away_odds) = data
+                events.append({
+                    "home_team": home_name,
+                    "away_team": away_name,
+                    "home_odds": home_odds,
+                    "away_odds": away_odds
+                })
+            except Exception:
+                # ohita yksittäisen sivun virhe
+                continue
+
+        if debug and not events:
+            print("[DEBUG] Veikkaus returned 0 events → dumping snapshot")
+            _dbg_dump(page, "veikkaus", debug_dir)
+
+    finally:
+        browser.close()
+        context.close()
+        p.stop()
+    return events
+
         browser.close()
         context.close()
         p.stop()
