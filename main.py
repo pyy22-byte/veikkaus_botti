@@ -20,19 +20,31 @@ def load_config():
     return yaml.safe_load(expanded)
 
 
+def _peek(name, items, n=2):
+    if not items:
+        return
+    print(f"[DEBUG] Sample from {name}:")
+    for i, it in enumerate(items[:n], 1):
+        print(f"  {i}. {it}")
+
 def run_once():
     cfg = load_config()
+    debug = bool(cfg.get("debug", False))
     threshold = float(cfg.get("threshold_percent", 5.0))
     p_cfg = cfg["sites"]["pinnacle"]
     v_cfg = cfg["sites"]["veikkaus"]
 
     print("Fetching Pinnacle...")
-    pinnacle_events = fetch_pinnacle(p_cfg)
+    pinnacle_events = fetch_pinnacle(p_cfg, debug=debug)   # <─ debug välitetään
     print(f"Pinnacle events: {len(pinnacle_events)}")
+    if debug:
+        _peek("Pinnacle", pinnacle_events)
 
     print("Fetching Veikkaus...")
-    veikkaus_events = fetch_veikkaus(v_cfg)
+    veikkaus_events = fetch_veikkaus(v_cfg, debug=debug)   # <─ debug välitetään
     print(f"Veikkaus events: {len(veikkaus_events)}")
+    if debug:
+        _peek("Veikkaus", veikkaus_events)
 
     # Compare and compute notifications
     notifications = compare_moneyline(pinnacle_events, veikkaus_events, threshold)
