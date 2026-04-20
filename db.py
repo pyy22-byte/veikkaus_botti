@@ -5,7 +5,6 @@ from pathlib import Path
 DB_PATH = Path('events.db')
 logger = logging.getLogger(__name__)
 
-# Improvement threshold to re-notify (percentage points above last notified improvement)
 RENOTIFY_IMPROVEMENT_DELTA = 5.0
 
 
@@ -18,6 +17,9 @@ def _connect():
 def initialize_db():
     conn = _connect()
     cur = conn.cursor()
+    # Drop and recreate if schema is outdated
+    cur.execute("DROP TABLE IF EXISTS events")
+    cur.execute("DROP TABLE IF EXISTS notifications")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS events(
             match_key TEXT PRIMARY KEY,
@@ -64,11 +66,6 @@ def upsert_event(k, h, a, ph, pa, vh, va, ts):
 
 
 def should_notify(match_key, side, current_improvement_pct):
-    """
-    Returns True if we should send a notification:
-    - Never notified before, OR
-    - Current improvement is >= last notified improvement + RENOTIFY_IMPROVEMENT_DELTA
-    """
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
@@ -79,8 +76,7 @@ def should_notify(match_key, side, current_improvement_pct):
     conn.close()
     if row is None:
         return True
-    last_pct = row[0]
-    return current_improvement_pct >= last_pct + RENOTIFY_IMPROVEMENT_DELTA
+    return current_improvement_pct >= row[0] + RENOTIFY_IMPROVEMENT_DELTA
 
 
 def mark_notified(match_key, side, improvement_pct, ts):
