@@ -1,53 +1,96 @@
 import sqlite3
-from contextlib import closing
+import logging
+from pathlib import Path
 
-DB_PATH = "events.db"
+DB_PATH = Path('events.db')
+logger = logging.getLogger(__name__)
+
+# Improvement threshold to re-notify (percentage points above last notified improvement)
+RENOTIFY_IMPROVEMENT_DELTA = 5.0
+
+
+def _connect():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
 
 def initialize_db():
-    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                match_key TEXT PRIMARY KEY,
-                home_team TEXT,
-                away_team TEXT,
-                pinn_home REAL,
-                pinn_away REAL,
-                veik_home REAL,
-                veik_away REAL,
-                notified_home INTEGER DEFAULT 0,
-                notified_away INTEGER DEFAULT 0,
-                updated_at TEXT
-            )
-        """)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS events(
+            match_key TEXT PRIMARY KEY,
+            home_team TEXT,
+            away_team TEXT,
+            pinnacle_home REAL,
+            pinnacle_away REAL,
+            veikkaus_home REAL,
+            veikkaus_away REAL,
+            updated_at TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS notifications(
+            match_key TEXT,
+            side TEXT,
+            last_improvement_pct REAL,
+            notified_at TEXT,
+            PRIMARY KEY(match_key, side)
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-def upsert_event(match_key, home_team, away_team, pinn_home, pinn_away, veik_home, veik_away, updated_at):
-    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
-        conn.execute("""
-            INSERT INTO events(match_key, home_team, away_team, pinn_home, pinn_away, veik_home, veik_away, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(match_key) DO UPDATE SET
-                home_team=excluded.home_team,
-                away_team=excluded.away_team,
-                pinn_home=excluded.pinn_home,
-                pinn_away=excluded.pinn_away,
-                veik_home=excluded.veik_home,
-                veik_away=excluded.veik_away,
-                updated_at=excluded.updated_at
-        """, (match_key, home_team, away_team, pinn_home, pinn_away, veik_home, veik_away, updated_at))
 
-def get_event(match_key):
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        cur = conn.execute("SELECT * FROM events WHERE match_key=?", (match_key,))
-        return cur.fetchone()
+def upsert_event(k, h, a, ph, pa, vh, va, ts):
+    conn = _connect()
+    conn.execute("""
+        INSERT INTO events(match_key, home_team, away_team,
+                           pinnacle_home, pinnacle_away,
+                           veikkaus_home, veikkaus_away, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(match_key) DO UPDATE SET
+            home_team=excluded.home_team,
+            away_team=excluded.away_team,
+            pinnacle_home=excluded.pinnacle_home,
+            pinnacle_away=excluded.pinnacle_away,
+            veikkaus_home=excluded.veikkaus_home,
+            veikkaus_away=excluded.veikkaus_away,
+            updated_at=excluded.updated_at
+    """, (k, h, a, ph, pa, vh, va, ts))
+    conn.commit()
+    conn.close()
 
-def mark_notified(match_key, side):  # side: "home" tai "away"
-    col = "notified_home" if side == "home" else "notified_away"
-    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
-        conn.execute(f"UPDATE events SET {col}=1 WHERE match_key=?", (match_key,))
 
-def was_notified(match_key, side):
-    col = "notified_home" if side == "home" else "notified_away"
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        cur = conn.execute(f"SELECT {col} FROM events WHERE match_key=?", (match_key,))
-        row = cur.fetchone()
-        return bool(row and row[0])
+def should_notify(match_key, side, current_improvement_pct):
+    """
+    Returns True if we should send a notification:
+    - Never notified before, OR
+    - Current improvement is >= last notified improvement + RENOTIFY_IMPROVEMENT_DELTA
+    """
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT last_improvement_pct FROM notifications WHERE match_key=? AND side=?",
+        (match_key, side)
+    )
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return True
+    last_pct = row[0]
+    return current_improvement_pct >= last_pct + RENOTIFY_IMPROVEMENT_DELTA
+
+
+def mark_notified(match_key, side, improvement_pct, ts):
+    conn = _connect()
+    conn.execute("""
+        INSERT INTO notifications(match_key, side, last_improvement_pct, notified_at)
+        VALUES(?, ?, ?, ?)
+        ON CONFLICT(match_key, side) DO UPDATE SET
+            last_improvement_pct=excluded.last_improvement_pct,
+            notified_at=excluded.notified_at
+    """, (match_key, side, improvement_pct, ts))
+    conn.commit()
+    conn.close()
