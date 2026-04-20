@@ -1,31 +1,25 @@
-"""
-Main entry point for the NHL moneyline odds comparison bot.
-Runs once per execution (suitable for GitHub Actions cron or local run).
-"""
+import logging
 import os
 import yaml
 from datetime import datetime, timezone
 
-from scraper import fetch_pinnacle, fetch_veikkaus
+from scraper import fetch_all
 from compare import compare_moneyline, match_key_from_names
-from db import initialize_db, upsert_event, was_notified, mark_notified
-from notifier import send_telegram_message, build_message
+from db import initialize_db, upsert_event, should_notify, mark_notified
+from notifier import send_discord_message, build_message
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def load_config():
-    """Read config.yaml and expand $ENV variables safely (won't break CSS $=)."""
     with open("config.yaml", "r", encoding="utf-8") as f:
         raw = f.read()
-    expanded = os.path.expandvars(raw)
-    return yaml.safe_load(expanded)
+    return yaml.safe_load(os.path.expandvars(raw))
 
-
-def _peek(name, items, n=2):
-    if not items:
-        return
-    print(f"[DEBUG] Sample from {name}:")
-    for i, it in enumerate(items[:n], 1):
-        print(f"  {i}. {it}")
 
 def run_once():
     cfg = load_config()
@@ -33,42 +27,55 @@ def run_once():
     threshold = float(cfg.get("threshold_percent", 5.0))
     p_cfg = cfg["sites"]["pinnacle"]
     v_cfg = cfg["sites"]["veikkaus"]
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
 
-    print("Fetching Pinnacle...")
-    pinnacle_events = fetch_pinnacle(p_cfg, debug=debug)   # <─ debug välitetään
-    print(f"Pinnacle events: {len(pinnacle_events)}")
+    if not webhook_url:
+        logger.warning("DISCORD_WEBHOOK_URL not set — notifications will be skipped.")
+
+    logger.info("Fetching Pinnacle and Veikkaus concurrently...")
+    try:
+        pinnacle_events, veikkaus_events = fetch_all(p_cfg, v_cfg, debug=debug)
+    except Exception as e:
+        logger.error(f"Scraping failed: {e}", exc_info=True)
+        send_discord_message(webhook_url, f"⚠️ Scraping failed: {e}")
+        return
+
+    logger.info(f"Pinnacle events: {len(pinnacle_events)}")
+    logger.info(f"Veikkaus events: {len(veikkaus_events)}")
+
     if debug:
-        _peek("Pinnacle", pinnacle_events)
+        for label, items in [("Pinnacle", pinnacle_events), ("Veikkaus", veikkaus_events)]:
+            for it in items[:2]:
+                logger.debug(f"Sample {label}: {it}")
 
-    print("Fetching Veikkaus...")
-    veikkaus_events = fetch_veikkaus(v_cfg, debug=debug)   # <─ debug välitetään
-    print(f"Veikkaus events: {len(veikkaus_events)}")
-    if debug:
-        _peek("Veikkaus", veikkaus_events)
-
-    # Compare and compute notifications
     notifications = compare_moneyline(pinnacle_events, veikkaus_events, threshold)
-    print(f"Candidates over threshold: {len(notifications)}")
+    logger.info(f"Candidates over threshold: {len(notifications)}")
 
-    # Upsert latest snapshot + notify once per side
     now = datetime.now(timezone.utc).isoformat()
-    token = os.environ.get("TELEGRAM_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
+    # Persist all matched events to DB
     for p in pinnacle_events:
         key = match_key_from_names(p["home_team"], p["away_team"])
-        v = next((x for x in veikkaus_events
-                  if match_key_from_names(x["home_team"], x["away_team"]) == key), None)
+        v = next(
+            (x for x in veikkaus_events
+             if match_key_from_names(x["home_team"], x["away_team"]) == key),
+            None
+        )
         veik_home = v["home_odds"] if v else None
         veik_away = v["away_odds"] if v else None
         upsert_event(key, p["home_team"], p["away_team"],
-                     p["home_odds"], p["away_odds"], veik_home, veik_away, now)
+                     p["home_odds"], p["away_odds"],
+                     veik_home, veik_away, now)
 
+    # Send notifications (with re-notify if improvement grows by 5%+)
     for ev in notifications:
         side = ev["side"]
-        if not was_notified(ev["match_key"], side):
-            send_telegram_message(token, chat_id, build_message(ev))
-            mark_notified(ev["match_key"], side)
+        if should_notify(ev["match_key"], side, ev["improvement_pct"]):
+            send_discord_message(webhook_url, build_message(ev))
+            mark_notified(ev["match_key"], side, ev["improvement_pct"], now)
+            logger.info(f"Notified: {ev['match_key']} ({side}) +{ev['improvement_pct']}%")
+        else:
+            logger.debug(f"Skipped (already notified): {ev['match_key']} ({side})")
 
 
 if __name__ == "__main__":

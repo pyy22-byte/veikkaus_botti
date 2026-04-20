@@ -1,35 +1,22 @@
-# Yleiset asetukset
 sport: "NHL"
 threshold_percent: 5.0
-
-# Laita true kun haluat nähtäville lisälogit, selector-countit ja näyterivit.
-# Paikallisessa ajossa tallettaa myös debug-screenshotteja/HTML:ää hakemistoon ./debug/
 debug: true
 
 sites:
   pinnacle:
     url: "https://www.pinnacle.com/en/hockey/nhl/matchups"
-    # Ottelurivi
     event_selector: 'div[data-test-id^="row-"]'
-    # Joukkueiden nimet rivissä
     team_selector: 'span.ellipsis[class^="gameInfoLabel"]'
-    # Moneyline-konteineri rivissä
     money_container_selector: 'div[data-test-id="moneyline"]'
-    # Kertoimen <span>
     price_selector: 'span[class^="price"]'
 
   veikkaus:
-    # Pitkävedon listaus (NHL-suodatin t=3-2-1)
     list_url: "https://www.veikkaus.fi/fi/vedonlyonti/pitkaveto?t=3-2-1"
-    # Ottelulinkit listalta (tupla-valitsin, ensimmäinen joka osuu riittää)
     list_event_selector: 'a[data-test-id^="pikavetopage-game-row"][href*="kohde="], div[data-test-id^="matchRow"] a[href*="kohde="]'
-    # Ottelusivun moneyline-painikkeet
     ml_button_selector: 'button[data-test-id$="MONEY_LINE"]'
-    # Joukkueen nimi painikkeessa
     ml_team_selector: 'div[class*="competitor-name"]'
-    # Kertoimen <span> painikkeessa
     ml_price_selector: 'span'
 
-telegram:
-  token: ${TELEGRAM_TOKEN}
-  chat_id: ${TELEGRAM_CHAT_ID}
+discord:
+  webhook_url: ${DISCORD_WEBHOOK_URL}
+  chat_id: ${DISCORD_CHAT_ID}

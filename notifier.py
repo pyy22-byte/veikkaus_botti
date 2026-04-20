@@ -1,21 +1,34 @@
+import logging
 import requests
 
-def send_telegram_message(token: str, chat_id: str, text: str) -> None:
-    if not token or not chat_id:
-        return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-    try:
-        requests.post(url, data=data, timeout=15).raise_for_status()
-    except Exception:
-        pass
+logger = logging.getLogger(__name__)
 
-def build_message(event: dict) -> str:
-    # event: dict with keys: home_team, away_team, side, pinn_odds, veik_odds, diff_pct
-    side_txt = "Kotijoukkue" if event["side"] == "home" else "Vierasjoukkue"
+DISCORD_USERNAME = "NHL Moneyline Bot"
+
+
+def build_message(ev):
+    side = 'KOTI' if ev['side'] == 'home' else 'VIERAS'
     return (
-        f"📣 <b>NHL Moneyline-ero</b>\n"
-        f"{event['home_team']} vs {event['away_team']}\n"
-        f"{side_txt}: Veikkaus {event['veik_odds']} vs Pinnacle {event['pinn_odds']}\n"
-        f"Etu: {event['diff_pct']:.1f}%"
+        f"**NHL moneyline etu** ({side})\n"
+        f"{ev['home_team']} vs {ev['away_team']}\n"
+        f"Veikkaus: **{ev['veikkaus']}**  •  Pinnacle: {ev['pinnacle']}\n"
+        f"Parannus: **{ev['improvement_pct']}%**"
     )
+
+
+def send_discord_message(webhook_url, message):
+    if not webhook_url:
+        logger.warning("Missing DISCORD_WEBHOOK_URL; skipping send.")
+        return
+    payload = {
+        "username": DISCORD_USERNAME,
+        "content": message,
+    }
+    try:
+        r = requests.post(webhook_url, json=payload, timeout=20)
+        if r.ok:
+            logger.info("Discord message sent.")
+        else:
+            logger.warning(f"Discord API error: {r.status_code} {r.text}")
+    except Exception as e:
+        logger.warning(f"Discord send failed: {e}")
