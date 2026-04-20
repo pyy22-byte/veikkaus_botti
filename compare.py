@@ -1,55 +1,49 @@
-def normalize_team(name: str) -> str:
-    return " ".join(name.lower().split())
+import re
+import unicodedata
 
-def match_key_from_names(home: str, away: str) -> str:
-    # Avain sama riippumatta järjestyksestä: a|b (a<b)
-    a, b = sorted([normalize_team(home), normalize_team(away)])
-    return f"{a}|{b}"
 
-def build_index(events):
-    idx = {}
-    for e in events:
-        key = match_key_from_names(e["home_team"], e["away_team"])
-        idx[key] = e
-    return idx
+def _norm(s):
+    s = s.strip().lower()
+    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
+    s = re.sub(r'[^a-z0-9 ]+', '', s)
+    s = re.sub(r'\s+', ' ', s)
+    return s
 
-def compare_moneyline(pinn_events, veik_events, threshold_percent):
-    """Palauttaa listan ilmoituksista: dict jossa mm. side=home/away, diff_pct jne."""
-    res = []
-    p_idx = build_index(pinn_events)
-    v_idx = build_index(veik_events)
 
-    for key, p in p_idx.items():
-        if key not in v_idx:
+def match_key_from_names(home, away):
+    return f"{_norm(home)}__vs__{_norm(away)}"
+
+
+def compare_moneyline(p, v, thr):
+    idx = {match_key_from_names(e['home_team'], e['away_team']): e for e in p}
+    out = []
+    for x in v:
+        k = match_key_from_names(x['home_team'], x['away_team'])
+        a = idx.get(k)
+        if not a:
             continue
-        v = v_idx[key]
-
-        # home side
-        if p["home_odds"] and v["home_odds"]:
-            diff_home = (v["home_odds"] - p["home_odds"]) / p["home_odds"] * 100.0
-            if diff_home >= threshold_percent:
-                res.append({
-                    "match_key": key,
-                    "home_team": p["home_team"],
-                    "away_team": p["away_team"],
-                    "side": "home",
-                    "pinn_odds": p["home_odds"],
-                    "veik_odds": v["home_odds"],
-                    "diff_pct": diff_home
+        if a['home_odds'] and x['home_odds']:
+            diff = (x['home_odds'] - a['home_odds']) / a['home_odds'] * 100.0
+            if diff >= thr:
+                out.append({
+                    'match_key': k,
+                    'home_team': x['home_team'],
+                    'away_team': x['away_team'],
+                    'side': 'home',
+                    'pinnacle': a['home_odds'],
+                    'veikkaus': x['home_odds'],
+                    'improvement_pct': round(diff, 2)
                 })
-
-        # away side
-        if p["away_odds"] and v["away_odds"]:
-            diff_away = (v["away_odds"] - p["away_odds"]) / p["away_odds"] * 100.0
-            if diff_away >= threshold_percent:
-                res.append({
-                    "match_key": key,
-                    "home_team": p["home_team"],
-                    "away_team": p["away_team"],
-                    "side": "away",
-                    "pinn_odds": p["away_odds"],
-                    "veik_odds": v["away_odds"],
-                    "diff_pct": diff_away
+        if a['away_odds'] and x['away_odds']:
+            diff = (x['away_odds'] - a['away_odds']) / a['away_odds'] * 100.0
+            if diff >= thr:
+                out.append({
+                    'match_key': k,
+                    'home_team': x['home_team'],
+                    'away_team': x['away_team'],
+                    'side': 'away',
+                    'pinnacle': a['away_odds'],
+                    'veikkaus': x['away_odds'],
+                    'improvement_pct': round(diff, 2)
                 })
-
-    return res
+    return out
