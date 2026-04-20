@@ -2,6 +2,11 @@ name: kerroinseuranta
 on:
   schedule: [ { cron: '*/5 * * * *' } ]
   workflow_dispatch:
+    inputs:
+      debug_selectors:
+        description: 'Run selector debug mode (yes/no)'
+        required: false
+        default: 'no'
 concurrency:
   group: kerroinseuranta
   cancel-in-progress: true
@@ -33,10 +38,21 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m playwright install --with-deps
 
+      - name: Debug selectors
+        if: ${{ github.event.inputs.debug_selectors == 'yes' }}
+        run: python debug_selectors.py
+
+      - name: Upload debug screenshots
+        if: ${{ github.event.inputs.debug_selectors == 'yes' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug/
+
       - name: Run
+        if: ${{ github.event.inputs.debug_selectors != 'yes' }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          DISCORD_CHAT_ID: ${{ secrets.DISCORD_CHAT_ID }}
         run: python main.py
 
       - name: Notify on failure
