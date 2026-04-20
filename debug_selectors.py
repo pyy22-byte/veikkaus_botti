@@ -1,74 +1,54 @@
-"""
-Network request interceptor - finds the actual API endpoints both sites use.
-"""
-import asyncio, json
-from playwright.async_api import async_playwright
-from pathlib import Path
+"""Test API endpoints directly."""
+import requests, json
 
-async def main():
-    Path("debug").mkdir(exist_ok=True)
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-            locale="fi-FI"
-        )
+PINNACLE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+    "Accept": "application/json",
+    "X-Device-UUID": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+}
+VEIKKAUS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+    "Accept": "application/json",
+    "Referer": "https://www.veikkaus.fi/",
+}
 
-        # ── Pinnacle: intercept network requests ──
-        print("=== PINNACLE API REQUESTS ===")
-        pinnacle_requests = []
-        page = await context.new_page()
+print("=== PINNACLE API ===")
+# Get matchups
+r = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/matchups",
+                 headers=PINNACLE_HEADERS, timeout=30)
+print(f"Matchups status: {r.status_code}")
+matchups = r.json()
+print(f"Matchups count: {len(matchups)}")
+for m in matchups[:3]:
+    if m.get("type") == "matchup":
+        parts = m.get("participants", [])
+        home = next((p["name"] for p in parts if p.get("alignment") == "home"), "?")
+        away = next((p["name"] for p in parts if p.get("alignment") == "away"), "?")
+        print(f"  Match: {home} vs {away} (id={m['id']})")
 
-        def handle_pinnacle_request(request):
-            url = request.url
-            if any(x in url for x in ['api', 'graphql', 'matchups', 'odds', 'json', 'v3', 'feed']):
-                pinnacle_requests.append(url)
+# Get odds
+r2 = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/markets/straight",
+                  headers=PINNACLE_HEADERS, timeout=30, params={"marketType": "moneyline"})
+print(f"Odds status: {r2.status_code}")
+odds = r2.json()
+print(f"Odds type: {type(odds)}, length: {len(odds) if isinstance(odds, list) else 'N/A'}")
+if isinstance(odds, list) and odds:
+    print(f"First odds item keys: {list(odds[0].keys())}")
+    print(f"First odds sample: {json.dumps(odds[0], indent=2)[:300]}")
 
-        page.on("request", handle_pinnacle_request)
-        await page.goto("https://www.pinnacle.com/en/hockey/nhl/matchups", wait_until="networkidle", timeout=60000)
-        await asyncio.sleep(3)
-        await page.screenshot(path="debug/pinnacle.png", full_page=True)
-
-        print(f"Interesting requests ({len(pinnacle_requests)}):")
-        for r in pinnacle_requests[:20]:
-            print(f"  {r}")
-        await page.close()
-
-        # ── Veikkaus: intercept network requests ──
-        print("\n=== VEIKKAUS API REQUESTS ===")
-        veikkaus_requests = []
-        page2 = await context.new_page()
-
-        def handle_veikkaus_request(request):
-            url = request.url
-            if any(x in url for x in ['api', 'json', 'odds', 'fixture', 'market', 'event', 'competition', 'v1', 'v2']):
-                veikkaus_requests.append(url)
-
-        page2.on("request", handle_veikkaus_request)
-        await page2.goto(
-            "https://www.veikkaus.fi/fi/pitkaveto/fi/sports/competition/944/jaakiekko/usa/nhl/matches",
-            wait_until="networkidle", timeout=60000
-        )
-        await asyncio.sleep(3)
-        await page2.screenshot(path="debug/veikkaus.png", full_page=True)
-
-        print(f"Interesting requests ({len(veikkaus_requests)}):")
-        for r in veikkaus_requests[:20]:
-            print(f"  {r}")
-
-        # Try fetching one of the API responses
-        if veikkaus_requests:
-            try:
-                resp = await page2.evaluate(f"""async () => {{
-                    const r = await fetch('{veikkaus_requests[0]}');
-                    const text = await r.text();
-                    return text.substring(0, 500);
-                }}""")
-                print(f"\nFirst API response sample:\n{resp}")
-            except Exception as e:
-                print(f"Could not fetch: {e}")
-
-        await page2.close()
-        await browser.close()
-
-asyncio.run(main())
+print("\n=== VEIKKAUS API ===")
+r3 = requests.get(
+    "https://content.ob.veikkaus.fi/content-service/api/v1/q/drilldown-tree"
+    "?drilldownNodeIds=2&eventState=OPEN_EVENT&includeMarketGroupCodeCombis=true&lang=fi-FI&channel=I",
+    headers=VEIKKAUS_HEADERS, timeout=30
+)
+print(f"Veikkaus status: {r3.status_code}")
+data = r3.json()
+print(f"Response type: {type(data)}")
+if isinstance(data, dict):
+    print(f"Top keys: {list(data.keys())[:10]}")
+    print(f"Sample: {json.dumps(data, indent=2)[:500]}")
+elif isinstance(data, list):
+    print(f"List length: {len(data)}")
+    if data:
+        print(f"First item: {json.dumps(data[0], indent=2)[:500]}")
