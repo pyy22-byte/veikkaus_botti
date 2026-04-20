@@ -1,4 +1,4 @@
-"""Test API endpoints directly."""
+"""Test API endpoints - diagnose response structures."""
 import requests, json
 
 PINNACLE_HEADERS = {
@@ -12,43 +12,43 @@ VEIKKAUS_HEADERS = {
     "Referer": "https://www.veikkaus.fi/",
 }
 
-print("=== PINNACLE API ===")
-# Get matchups
-r = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/matchups",
+print("=== PINNACLE: try different odds endpoints ===")
+# Try without marketType param
+r = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/markets/straight",
                  headers=PINNACLE_HEADERS, timeout=30)
-print(f"Matchups status: {r.status_code}")
-matchups = r.json()
-print(f"Matchups count: {len(matchups)}")
-for m in matchups[:3]:
-    if m.get("type") == "matchup":
-        parts = m.get("participants", [])
-        home = next((p["name"] for p in parts if p.get("alignment") == "home"), "?")
-        away = next((p["name"] for p in parts if p.get("alignment") == "away"), "?")
-        print(f"  Match: {home} vs {away} (id={m['id']})")
+print(f"No param: {r.status_code}, len={len(r.text)}")
+if r.status_code == 200:
+    data = r.json()
+    print(f"Type: {type(data)}, len: {len(data) if isinstance(data, list) else 'dict'}")
+    if isinstance(data, list) and data:
+        print(f"First item keys: {list(data[0].keys())}")
+        print(json.dumps(data[0], indent=2)[:400])
 
-# Get odds
+# Try with type=moneyline
 r2 = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/markets/straight",
-                  headers=PINNACLE_HEADERS, timeout=30, params={"marketType": "moneyline"})
-print(f"Odds status: {r2.status_code}")
-odds = r2.json()
-print(f"Odds type: {type(odds)}, length: {len(odds) if isinstance(odds, list) else 'N/A'}")
-if isinstance(odds, list) and odds:
-    print(f"First odds item keys: {list(odds[0].keys())}")
-    print(f"First odds sample: {json.dumps(odds[0], indent=2)[:300]}")
+                  headers=PINNACLE_HEADERS, timeout=30, params={"type": "moneyline"})
+print(f"\ntype=moneyline: {r2.status_code}, len={len(r2.text)}")
 
-print("\n=== VEIKKAUS API ===")
-r3 = requests.get(
+# Try matchups with odds embedded
+r3 = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/matchups",
+                  headers=PINNACLE_HEADERS, timeout=30, params={"withSpecials": "false"})
+print(f"\nMatchups: {r3.status_code}")
+matchups = r3.json()
+# Show first matchup with participants
+for m in matchups[:5]:
+    if m.get("type") == "matchup" and m.get("participants"):
+        print(f"Matchup: {json.dumps(m, indent=2)[:600]}")
+        break
+
+print("\n=== VEIKKAUS: parse GraphQL response ===")
+r4 = requests.get(
     "https://content.ob.veikkaus.fi/content-service/api/v1/q/drilldown-tree"
     "?drilldownNodeIds=2&eventState=OPEN_EVENT&includeMarketGroupCodeCombis=true&lang=fi-FI&channel=I",
     headers=VEIKKAUS_HEADERS, timeout=30
 )
-print(f"Veikkaus status: {r3.status_code}")
-data = r3.json()
-print(f"Response type: {type(data)}")
-if isinstance(data, dict):
-    print(f"Top keys: {list(data.keys())[:10]}")
-    print(f"Sample: {json.dumps(data, indent=2)[:500]}")
-elif isinstance(data, list):
-    print(f"List length: {len(data)}")
-    if data:
-        print(f"First item: {json.dumps(data[0], indent=2)[:500]}")
+data = r4.json()
+print(f"Keys: {list(data.keys())}")
+# Navigate into data
+inner = data.get("data", {})
+print(f"data keys: {list(inner.keys()) if isinstance(inner, dict) else type(inner)}")
+print(json.dumps(inner, indent=2)[:1000])
