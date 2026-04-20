@@ -1,5 +1,6 @@
 import logging
 import requests
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -11,12 +12,10 @@ PINNACLE_HEADERS = {
 VEIKKAUS_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
     "Accept": "application/json",
-    "Referer": "https://www.veikkaus.fi/",
+    "Referer": "https://www.veikkaus.fi/fi/pitkaveto/fi/sports/competition/944/jaakiekko/usa/nhl/matches",
 }
 
 NHL_LEAGUE_ID = 1456
-# Veikkaus NHL competition node ID (from drilldown-tree: USA/NHL)
-VEIKKAUS_NHL_NODE_ID = "944"
 
 
 def _american_to_decimal(american):
@@ -29,7 +28,7 @@ def _american_to_decimal(american):
 def fetch_pinnacle(cfg, debug=False):
     events = []
     try:
-        # Step 1: get matchups to build id→teams index
+        # Step 1: matchups → id→teams index
         r = requests.get(
             f"https://guest.api.arcadia.pinnacle.com/0.1/leagues/{NHL_LEAGUE_ID}/matchups",
             headers=PINNACLE_HEADERS, timeout=30
@@ -49,7 +48,7 @@ def fetch_pinnacle(cfg, debug=False):
 
         logger.debug(f"Pinnacle matchups indexed: {len(matchup_idx)}")
 
-        # Step 2: get all markets (no param = all types)
+        # Step 2: all markets
         r2 = requests.get(
             f"https://guest.api.arcadia.pinnacle.com/0.1/leagues/{NHL_LEAGUE_ID}/markets/straight",
             headers=PINNACLE_HEADERS, timeout=30
@@ -57,7 +56,7 @@ def fetch_pinnacle(cfg, debug=False):
         r2.raise_for_status()
         markets = r2.json()
 
-        # Step 3: filter moneyline markets, period=0 (full game), not alternate
+        # Step 3: filter moneyline, period=0, not alternate
         for market in markets:
             if market.get("type") != "moneyline":
                 continue
@@ -91,51 +90,51 @@ def fetch_pinnacle(cfg, debug=False):
     logger.info(f"Pinnacle events: {len(events)}")
     if debug:
         for ev in events[:3]:
-            logger.debug(f"  Pinnacle sample: {ev}")
+            logger.debug(f"  Pinnacle: {ev}")
     return events
 
 
 def fetch_veikkaus(cfg, debug=False):
-    """
-    Fetch Veikkaus NHL odds using the events API.
-    The drilldown-tree only gives hierarchy — we need the events endpoint.
-    """
     events = []
     try:
-        # Use the grouped-event-list endpoint with NHL competition node
-        url = (
-            "https://content.ob.veikkaus.fi/content-service/api/v1/q/grouped-event-list"
-            f"?drilldownNodeIds={VEIKKAUS_NHL_NODE_ID}"
-            "&eventState=OPEN_EVENT"
-            "&marketGroupCodeCombis=MATCH_RESULT_NO_OVERTIME,MONEY_LINE"
-            "&lang=fi-FI&channel=I"
-            "&maxMarkets=1"
+        now = datetime.now(timezone.utc)
+        # startTimeFrom = yesterday 21:00 UTC (catch late games)
+        start = (now - timedelta(days=1)).replace(hour=21, minute=0, second=0, microsecond=0)
+        # startTimeTo = 7 days ahead
+        end = (now + timedelta(days=7)).replace(hour=21, minute=59, second=59, microsecond=0)
+
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        params = {
+            "startTimeFrom": start.strftime(fmt),
+            "startTimeTo": end.strftime(fmt),
+            "maxMarkets": 10,
+            "orderMarketsBy": "displayOrder",
+            "excludeEventsWithNoMarkets": "false",
+            "eventSortsIncluded": "MTCH",
+            "includeChildMarkets": "true",
+            "prioritisePrimaryMarkets": "true",
+            "includeCommentary": "false",
+            "includeMedia": "false",
+            "drilldownTagIds": "944",
+            "useMarketGroupCodeCombis": "true",
+            "marketGroupCodeCombiId": "55",  # "Voittaja" = ML market group
+            "lang": "fi-FI",
+            "channel": "I",
+        }
+
+        r = requests.get(
+            "https://content.ob.veikkaus.fi/content-service/api/v1/q/event-list",
+            headers=VEIKKAUS_HEADERS, params=params, timeout=30
         )
-        r = requests.get(url, headers=VEIKKAUS_HEADERS, timeout=30)
-        logger.debug(f"Veikkaus grouped-event-list: {r.status_code}, len={len(r.text)}")
-
-        if r.status_code != 200:
-            # Fallback: try filtered-event-list
-            url2 = (
-                "https://content.ob.veikkaus.fi/content-service/api/v1/q/filtered-event-list"
-                f"?drilldownNodeIds={VEIKKAUS_NHL_NODE_ID}"
-                "&eventState=OPEN_EVENT"
-                "&marketGroupCodeCombis=MATCH_RESULT_NO_OVERTIME"
-                "&lang=fi-FI&channel=I"
-            )
-            r = requests.get(url2, headers=VEIKKAUS_HEADERS, timeout=30)
-            logger.debug(f"Veikkaus filtered-event-list: {r.status_code}, len={len(r.text)}")
-
+        logger.debug(f"Veikkaus event-list: {r.status_code}, len={len(r.text)}")
         r.raise_for_status()
         data = r.json()
 
         if debug:
             import json
-            logger.debug(f"Veikkaus response keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-            if isinstance(data, dict):
-                logger.debug(f"Veikkaus sample: {json.dumps(data, ensure_ascii=False)[:1000]}")
+            logger.debug(f"Veikkaus response: {json.dumps(data, ensure_ascii=False)[:1000]}")
 
-        events = _parse_veikkaus_events(data, debug)
+        events = _parse_veikkaus(data, debug)
 
     except Exception as e:
         logger.error(f"Veikkaus fetch failed: {e}", exc_info=True)
@@ -143,61 +142,42 @@ def fetch_veikkaus(cfg, debug=False):
     logger.info(f"Veikkaus events: {len(events)}")
     if debug:
         for ev in events[:3]:
-            logger.debug(f"  Veikkaus sample: {ev}")
+            logger.debug(f"  Veikkaus: {ev}")
     return events
 
 
-def _parse_veikkaus_events(data, debug=False):
+def _parse_veikkaus(data, debug=False):
     events = []
     if not isinstance(data, dict):
         return events
 
-    # GraphQL wrapper
+    # Unwrap GraphQL / OpenBet wrapper
     inner = data.get("data", data)
+    event_list = inner.get("events") or []
 
-    # Find events list
-    event_list = (
-        inner.get("events") or
-        inner.get("filteredEventList", {}).get("events") or
-        inner.get("groupedEventList", {}).get("events") or
-        []
-    )
-
-    # Also search nested
-    if not event_list:
-        for v in inner.values():
-            if isinstance(v, dict):
-                event_list = v.get("events", [])
-                if event_list:
-                    break
+    if debug:
+        logger.debug(f"Veikkaus event count: {len(event_list)}")
 
     for event in event_list:
-        name = event.get("name", "") or event.get("eventName", "")
-        markets = event.get("markets", []) or event.get("children", [])
-
+        markets = event.get("markets", [])
         for market in markets:
-            market_name = market.get("name", "") or market.get("marketName", "")
-            group_code = market.get("marketGroupCode", "")
-
-            # Match ML market: MONEY_LINE or MATCH_RESULT_NO_OVERTIME (2-way)
-            if group_code not in ("MONEY_LINE", "MATCH_RESULT_NO_OVERTIME"):
+            outcomes = market.get("outcomes", [])
+            # Filter out draw outcomes
+            ml_outcomes = [
+                o for o in outcomes
+                if o.get("type", "") != "draw"
+                and o.get("outcomeMeaningMinorCode", "") != "X"
+                and "tasapeli" not in (o.get("name") or "").lower()
+            ]
+            if len(ml_outcomes) != 2:
                 continue
 
-            outcomes = market.get("outcomes", []) or market.get("children", [])
-            # Filter out draw
-            outcomes = [o for o in outcomes if o.get("type", "") != "draw"
-                       and "tasapeli" not in (o.get("name", "") or "").lower()
-                       and o.get("name", "") not in ("X", "Draw", "Tasapeli")]
-
-            if len(outcomes) != 2:
-                continue
-
-            o1, o2 = outcomes[0], outcomes[1]
+            o1, o2 = ml_outcomes[0], ml_outcomes[1]
             try:
                 p1 = float(o1.get("priceDec") or o1.get("price") or 0)
                 p2 = float(o2.get("priceDec") or o2.get("price") or 0)
-                n1 = (o1.get("name") or o1.get("outcomeName") or "").strip()
-                n2 = (o2.get("name") or o2.get("outcomeName") or "").strip()
+                n1 = (o1.get("name") or "").strip()
+                n2 = (o2.get("name") or "").strip()
                 if p1 > 1.0 and p2 > 1.0 and n1 and n2:
                     events.append({
                         "home_team": n1,
@@ -205,7 +185,7 @@ def _parse_veikkaus_events(data, debug=False):
                         "home_odds": p1,
                         "away_odds": p2,
                     })
-                    break  # one ML market per event is enough
+                    break
             except (TypeError, ValueError):
                 pass
 
