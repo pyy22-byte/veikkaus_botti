@@ -68,6 +68,8 @@ def fetch_pinnacle(cfg, debug=False):
             if home_price is None or away_price is None:
                 continue
             m = matchup_idx[matchup_id]
+            if not _is_real_matchup(m["home_team"], m["away_team"]):
+                continue
             events.append({
                 "home_team": m["home_team"],
                 "away_team": m["away_team"],
@@ -170,3 +172,12 @@ def fetch_all(p_cfg, v_cfg, debug=False):
     pinnacle_events = fetch_pinnacle(p_cfg, debug=debug)
     veikkaus_events = fetch_veikkaus(v_cfg, debug=debug)
     return pinnacle_events, veikkaus_events
+
+
+def _is_real_matchup(home_team, away_team):
+    """Filter out non-team entries like 'Home Goals (4 Games)'."""
+    fake_patterns = ["goals", "game", "period", "score", "total"]
+    for name in [home_team.lower(), away_team.lower()]:
+        if any(p in name for p in fake_patterns):
+            return False
+    return True
