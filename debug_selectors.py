@@ -11,29 +11,46 @@ VEIKKAUS_HEADERS = {
     "Referer": "https://www.veikkaus.fi/",
 }
 
-print("=== PINNACLE matchup full structure ===")
+print("=== PINNACLE: try markets endpoint variations ===")
+endpoints = [
+    "/0.1/leagues/1456/markets/straight",
+    "/0.1/leagues/1456/markets/straight?type=moneyline",
+    "/0.1/leagues/1456/markets/straight?primaryOnly=true",
+]
+for ep in endpoints:
+    r = requests.get(f"https://guest.api.arcadia.pinnacle.com{ep}",
+                     headers=PINNACLE_HEADERS, timeout=30)
+    print(f"{ep}: {r.status_code}, len={len(r.text)}")
+    if r.status_code == 200 and r.text:
+        data = r.json()
+        print(f"  type={type(data)}, len={len(data) if isinstance(data, list) else 'dict'}")
+        if isinstance(data, list) and data:
+            print(f"  first keys: {list(data[0].keys())}")
+            print(f"  first item: {json.dumps(data[0], indent=2)[:400]}")
+
+print("\n=== PINNACLE: get a specific matchup's markets ===")
+# Get first matchup ID
 r = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/matchups",
                  headers=PINNACLE_HEADERS, timeout=30)
 matchups = r.json()
-# Find first real matchup with prices
+first_id = None
 for m in matchups:
     if m.get("type") == "matchup" and m.get("participants"):
-        print(json.dumps(m, indent=2)[:1500])
+        first_id = m["id"]
+        parts = m["participants"]
+        home = next((p["name"] for p in parts if p.get("alignment") == "home"), "?")
+        away = next((p["name"] for p in parts if p.get("alignment") == "away"), "?")
+        print(f"First matchup: {home} vs {away}, id={first_id}")
         break
 
-print("\n=== PINNACLE: try special=false matchups with prices ===")
-r2 = requests.get("https://guest.api.arcadia.pinnacle.com/0.1/leagues/1456/matchups",
-                  headers=PINNACLE_HEADERS, timeout=30,
-                  params={"specialsOnly": "false"})
-data2 = r2.json()
-# Look for prices in matchup
-for m in data2[:10]:
-    if "prices" in str(m):
-        print(f"Found prices in matchup!")
-        print(json.dumps(m, indent=2)[:800])
-        break
+if first_id:
+    r2 = requests.get(f"https://guest.api.arcadia.pinnacle.com/0.1/matchups/{first_id}/markets/straight",
+                      headers=PINNACLE_HEADERS, timeout=30)
+    print(f"Matchup markets: {r2.status_code}, len={len(r2.text)}")
+    if r2.status_code == 200 and r2.text:
+        print(json.dumps(r2.json(), indent=2)[:600])
 
-print("\n=== VEIKKAUS GraphQL data structure ===")
+print("\n=== VEIKKAUS GraphQL full data ===")
 r3 = requests.get(
     "https://content.ob.veikkaus.fi/content-service/api/v1/q/drilldown-tree"
     "?drilldownNodeIds=2&eventState=OPEN_EVENT&includeMarketGroupCodeCombis=true&lang=fi-FI&channel=I",
@@ -42,5 +59,5 @@ r3 = requests.get(
 data3 = r3.json()
 inner = data3.get("data", {})
 print(f"data keys: {list(inner.keys()) if isinstance(inner, dict) else type(inner)}")
-# Print first 2000 chars of data
-print(json.dumps(inner, indent=2)[:2000])
+# Print structured sample
+print(json.dumps(inner, indent=2)[:3000])
