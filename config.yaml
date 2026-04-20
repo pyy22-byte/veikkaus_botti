@@ -11,12 +11,7 @@ sites:
     price_selector: 'span[class^="price"]'
 
   veikkaus:
-    list_url: "https://www.veikkaus.fi/fi/vedonlyonti/pitkaveto?t=3-2-1"
-    list_event_selector: 'a[data-test-id^="pikavetopage-game-row"][href*="kohde="], div[data-test-id^="matchRow"] a[href*="kohde="]'
-    ml_button_selector: 'button[data-test-id$="MONEY_LINE"]'
-    ml_team_selector: 'div[class*="competitor-name"]'
-    ml_price_selector: 'span'
+    list_url: "https://www.veikkaus.fi/fi/pitkaveto/fi/sports/competition/944/jaakiekko/usa/nhl/matches"
 
 discord:
   webhook_url: ${DISCORD_WEBHOOK_URL}
-  chat_id: ${DISCORD_CHAT_ID}

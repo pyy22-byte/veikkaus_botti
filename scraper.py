@@ -7,22 +7,21 @@ from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
+VEIKKAUS_NHL_URL = "https://www.veikkaus.fi/fi/pitkaveto/fi/sports/competition/944/jaakiekko/usa/nhl/matches"
+
 
 async def _accept_cookies(page):
-    selectors = [
+    for sel in [
         'button#onetrust-accept-btn-handler',
         'button:has-text("ACCEPT")',
-        'button:has-text("I Accept")',
-        'button:has-text("I understand")',
         'button:has-text("Hyväksy")',
         'button:has-text("Salli")',
         'text=Hyväksyn',
-    ]
-    for sel in selectors:
+    ]:
         try:
             loc = page.locator(sel)
             if await loc.count() and await loc.first.is_visible():
-                await loc.first.click(timeout=1500)
+                await loc.first.click(timeout=2000)
                 break
         except Exception:
             pass
@@ -86,111 +85,139 @@ async def _fetch_pinnacle_async(cfg, browser, debug, debug_dir):
             })
 
         if debug and not events:
-            logger.debug("Pinnacle returned 0 events — dumping snapshot")
             await _dbg_dump(page, "pinnacle_empty", debug_dir)
     finally:
         await context.close()
     return events
 
 
-async def _fetch_single_veikkaus_match(page, href, cfg, debug, debug_dir):
-    try:
-        await page.goto(href, wait_until="networkidle", timeout=60000)
-        await _accept_cookies(page)
-        await page.wait_for_selector(cfg["ml_button_selector"], timeout=30000)
-    except Exception as e:
-        if debug:
-            logger.debug(f"Veikkaus nav to match failed: {e} ({href})")
-            await _dbg_dump(page, "veikkaus_match_nav_fail", debug_dir)
-        return None
-
-    btns = page.locator(cfg["ml_button_selector"])
-    if await btns.count() < 2:
-        if debug:
-            logger.debug(f"No ML buttons on {href}")
-        return None
-
-    data = []
-    for j in range(2):
-        btn = btns.nth(j)
-        team_el = btn.locator(cfg["ml_team_selector"]).first
-        odd_el = btn.locator(cfg["ml_price_selector"]).first
-        if not (await team_el.count() and await odd_el.count()):
-            return None
-        name = (await team_el.inner_text()).strip()
-        txt = (await odd_el.inner_text()).strip().replace(",", ".")
-        try:
-            odd = float(txt)
-        except ValueError:
-            return None
-        data.append((name, odd))
-
-    if len(data) != 2:
-        return None
-
-    (home_name, home_odds), (away_name, away_odds) = data
-    return {
-        "home_team": home_name,
-        "away_team": away_name,
-        "home_odds": home_odds,
-        "away_odds": away_odds,
-    }
-
-
-async def _fetch_veikkaus_async(cfg, browser, debug, debug_dir, concurrency=4):
-    # Step 1: collect all match links using one page
+async def _fetch_veikkaus_async(cfg, browser, debug, debug_dir):
+    """
+    Scrape Veikkaus NHL list page directly.
+    The list page shows 1X2 odds per match in a single pass — no need to visit each match page.
+    We use kertoimet 1 (home win) and 2 (away win), ignoring X (draw).
+    """
     context = await browser.new_context(
         user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
         locale="fi-FI"
     )
-    list_page = await context.new_page()
-    links = []
+    page = await context.new_page()
+    events = []
     try:
+        url = cfg.get("list_url", VEIKKAUS_NHL_URL)
         try:
-            await list_page.goto(cfg["list_url"], wait_until="networkidle", timeout=60000)
-            await _accept_cookies(list_page)
-            await list_page.wait_for_selector(cfg["list_event_selector"], timeout=60000)
+            await page.goto(url, wait_until="networkidle", timeout=60000)
+            await _accept_cookies(page)
+            # Wait for match rows to appear
+            await page.wait_for_selector('[class*="EventRow"], [class*="eventRow"], td', timeout=60000)
+            await asyncio.sleep(2)
         except Exception as e:
-            logger.error(f"Veikkaus list navigation failed: {e}")
+            logger.error(f"Veikkaus navigation failed: {e}")
             if debug:
-                await _dbg_dump(list_page, "veikkaus_list_nav_fail", debug_dir)
-            await context.close()
+                await _dbg_dump(page, "veikkaus_fail", debug_dir)
             return []
 
-        anchors = list_page.locator(cfg["list_event_selector"])
-        for i in range(await anchors.count()):
-            href = await anchors.nth(i).get_attribute("href")
-            if not href:
-                continue
-            if href.startswith("/"):
-                href = "https://www.veikkaus.fi" + href
-            links.append(href)
+        if debug:
+            await _dbg_dump(page, "veikkaus_list", debug_dir)
+
+        # Parse via JavaScript — most reliable for dynamic React pages
+        events = await page.evaluate("""() => {
+            const results = [];
+            
+            // Each match block has two team names and three odds cells (1, X, 2)
+            // Find all rows that contain team pair + odds
+            const allText = document.body.innerText;
+            
+            // Strategy: find elements containing team names paired with odds
+            // Look for the match containers
+            const matchContainers = document.querySelectorAll(
+                '[class*="EventRow"], [class*="match-row"], [class*="event-row"], ' +
+                '[class*="MarketRow"], [class*="gameRow"]'
+            );
+            
+            matchContainers.forEach(container => {
+                const text = container.innerText;
+                const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
+                
+                // Look for pattern: team1, team2, then three numbers (1X2 odds)
+                const odds = [];
+                const teams = [];
+                
+                lines.forEach(line => {
+                    const n = parseFloat(line.replace(',', '.'));
+                    if (!isNaN(n) && n > 1.0 && n < 20.0) {
+                        odds.push(n);
+                    } else if (line.length > 3 && isNaN(parseFloat(line))) {
+                        teams.push(line);
+                    }
+                });
+                
+                // We need 2 teams and at least 3 odds (1, X, 2)
+                if (teams.length >= 2 && odds.length >= 3) {
+                    results.push({
+                        home_team: teams[0],
+                        away_team: teams[1],
+                        home_odds: odds[0],   // "1" = home win
+                        away_odds: odds[2],   // "2" = away win
+                    });
+                }
+            });
+            
+            return results;
+        }""")
+
+        logger.debug(f"Veikkaus parsed {len(events)} events via JS")
+
+        # If JS approach fails, try Python fallback
+        if not events:
+            logger.debug("JS approach returned 0, trying Python fallback")
+            events = await _parse_veikkaus_fallback(page, debug)
+
+        if debug and not events:
+            logger.debug("Veikkaus returned 0 events after all attempts")
+
     finally:
-        await list_page.close()
+        await context.close()
+    return events
 
-    logger.debug(f"Veikkaus match links: {len(links)}")
 
-    # Step 2: scrape match pages concurrently with a semaphore
-    semaphore = asyncio.Semaphore(concurrency)
+async def _parse_veikkaus_fallback(page, debug):
+    """Fallback: extract raw text and parse manually."""
     events = []
+    try:
+        raw = await page.evaluate("""() => {
+            // Get all text nodes with structure
+            const rows = [];
+            document.querySelectorAll('tr, [class*="row"], [class*="Row"]').forEach(el => {
+                const t = el.innerText?.trim();
+                if (t && t.length > 10) rows.push(t);
+            });
+            return rows.slice(0, 100);
+        }""")
 
-    async def scrape_one(href):
-        async with semaphore:
-            page = await context.new_page()
-            try:
-                result = await _fetch_single_veikkaus_match(page, href, cfg, debug, debug_dir)
-                if result:
-                    events.append(result)
-            finally:
-                await page.close()
+        for row_text in raw:
+            lines = [l.strip() for l in row_text.split('\n') if l.strip()]
+            teams = []
+            odds = []
+            for line in lines:
+                try:
+                    n = float(line.replace(',', '.'))
+                    if 1.0 < n < 20.0:
+                        odds.append(n)
+                except ValueError:
+                    if len(line) > 3 and not any(c.isdigit() for c in line[:2]):
+                        teams.append(line)
 
-    await asyncio.gather(*[scrape_one(href) for href in links])
-
-    if debug and not events:
-        logger.debug("Veikkaus returned 0 events")
-
-    await context.close()
+            if len(teams) >= 2 and len(odds) >= 3:
+                events.append({
+                    "home_team": teams[0],
+                    "away_team": teams[1],
+                    "home_odds": odds[0],
+                    "away_odds": odds[2],
+                })
+    except Exception as e:
+        logger.warning(f"Veikkaus fallback failed: {e}")
     return events
 
 
