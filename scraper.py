@@ -52,12 +52,17 @@ def fetch_pinnacle(cfg, debug=False):
         )
         r2.raise_for_status()
 
+        now_str = datetime.now(timezone.utc).isoformat()
         for market in r2.json():
             if market.get("type") != "moneyline":
                 continue
             if market.get("period", 0) != 0:
                 continue
             if market.get("isAlternate", False):
+                continue
+            # Skip markets whose cutoff has passed (game already started)
+            cutoff = market.get("cutoffAt", "")
+            if cutoff and cutoff < now_str:
                 continue
             matchup_id = market.get("matchupId")
             if matchup_id not in matchup_idx:
@@ -119,6 +124,9 @@ def fetch_veikkaus(cfg, debug=False):
         logger.debug(f"Veikkaus events received: {len(event_list)}")
 
         for event in event_list:
+            # Skip events that have already started or are live
+            if event.get("started") or event.get("liveNow"):
+                continue
             teams = event.get("teams", [])
             home_name = next((t["name"] for t in teams if t.get("side") == "HOME"), None)
             away_name = next((t["name"] for t in teams if t.get("side") == "AWAY"), None)
