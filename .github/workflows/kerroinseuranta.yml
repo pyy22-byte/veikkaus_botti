@@ -24,7 +24,7 @@ jobs:
           cache: 'pip'
 
       - name: Restore DB
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: events.db
           key: events-db-${{ github.run_id }}
