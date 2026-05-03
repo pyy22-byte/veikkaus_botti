@@ -15,11 +15,10 @@ def _connect():
 
 
 def initialize_db():
+    """Create tables if they don't exist. Never drop — that would wipe
+    notification history and cause re-notification spam on every run."""
     conn = _connect()
     cur = conn.cursor()
-    # Drop and recreate if schema is outdated
-    cur.execute("DROP TABLE IF EXISTS events")
-    cur.execute("DROP TABLE IF EXISTS notifications")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS events(
             match_key TEXT PRIMARY KEY,
@@ -41,6 +40,18 @@ def initialize_db():
             PRIMARY KEY(match_key, side)
         )
     """)
+    conn.commit()
+    conn.close()
+
+
+def cleanup_old_notifications(ttl_hours: int = 72):
+    """Remove stale notification records so the table doesn't grow forever
+    and so a match that comes back into focus weeks later can re-notify."""
+    conn = _connect()
+    conn.execute(
+        "DELETE FROM notifications WHERE notified_at < datetime('now', ?)",
+        (f'-{ttl_hours} hours',),
+    )
     conn.commit()
     conn.close()
 

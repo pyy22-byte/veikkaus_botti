@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 
 from scraper import fetch_all
 from compare import compare_moneyline, match_key_from_names
-from db import initialize_db, upsert_event, should_notify, mark_notified
+from db import (
+    initialize_db,
+    cleanup_old_notifications,
+    upsert_event,
+    should_notify,
+    mark_notified,
+)
 from notifier import send_discord_message, build_message
 
 logging.basicConfig(
@@ -80,4 +86,5 @@ def run_once():
 
 if __name__ == "__main__":
     initialize_db()
+    cleanup_old_notifications(ttl_hours=72)
     run_once()
